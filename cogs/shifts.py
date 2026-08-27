@@ -17,29 +17,28 @@ class ShiftCheckinModal(discord.ui.Modal):
         max_length=100
     )
 
-    def __init__(self, location: str, db, tz):
-        super().__init__(title='ลงชื่อเข้าเวร')
+    def __init__(self, location, db, tz):
+        super().__init__(title=f'ลงชื่อเข้าเวร: {location}')
         self.location = location
         self.db = db
         self.tz = tz
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        
         char_name = self.character_name.value
         now = datetime.now(self.tz)
-        
+        user_id = str(interaction.user.id)
+        discord_name = interaction.user.name
+
         if not self.db:
             await interaction.followup.send("❌ Database connection error.", ephemeral=True)
             return
 
-        user_id = str(interaction.user.id)
-        discord_name = str(interaction.user)
         shifts_ref = self.db.collection('shifts')
         
         # Check if already active
-        active_shift = shifts_ref.where('user_id', '==', user_id).where('status', '==', 'active').get()
-        if active_shift:
+        active_shifts = shifts_ref.where('user_id', '==', user_id).where('status', '==', 'active').get()
+        if active_shifts:
             await interaction.followup.send("⚠️ คุณกำลังเข้าเวรอยู่แล้วครับ ต้องออกเวรก่อนถึงจะเข้าใหม่ได้", ephemeral=True)
             return
 
@@ -69,7 +68,7 @@ class ShiftCheckinModal(discord.ui.Modal):
         try:
             await log_channel.send(embed=embed)
         except Exception:
-            pass # Silently fail if cannot send to log channel
+            pass
             
         await interaction.followup.send(f"✅ บันทึกเข้าเวรที่ {self.location} สำเร็จ ข้อมูลถูกส่งไปที่ {log_channel.mention} แล้วครับ", ephemeral=True)
 
@@ -120,6 +119,7 @@ class ShiftCheckoutModal(discord.ui.Modal):
             
         duration_str = "ไม่ทราบระยะเวลา"
         location = "ไม่ระบุ"
+        diff = None
         
         for shift_doc in active_shifts:
             data = shift_doc.to_dict()
@@ -136,7 +136,7 @@ class ShiftCheckoutModal(discord.ui.Modal):
             shift_doc.reference.update({
                 'check_out': now,
                 'status': 'completed',
-                'duration_seconds': diff.total_seconds() if check_in_time else 0
+                'duration_seconds': diff.total_seconds() if diff else 0
             })
             
         log_channel = await self.get_target_channel(interaction.guild, "ลงชื่อออกเวร", "⊹˚꒰📝꒱︰ลงชื่อออกเวร")
@@ -160,7 +160,7 @@ class ShiftCheckoutModal(discord.ui.Modal):
             
         await interaction.followup.send(f"✅ บันทึกออกเวรสำเร็จ ข้อมูลถูกส่งไปที่ {log_channel.mention} แล้วครับ", ephemeral=True)
         
-        # Dispatch event to update leaderboard in stats.py
+        # Dispatch event to update leaderboard
         self.bot.dispatch('shift_update')
 
 
@@ -204,10 +204,102 @@ class Shifts(commands.Cog):
             self.db = None
             
         self.tz = pytz.timezone('Asia/Bangkok')
+        self.live_message = None
+        self.leaderboard_channel_id = None
 
     async def cog_load(self):
         self.bot.add_view(ShiftCheckinView(self.db, self.tz))
         self.bot.add_view(ShiftCheckoutView(self.bot, self.db, self.tz))
+
+    def calculate_leaderboard_embed(self) -> discord.Embed:
+        if not self.db:
+            return discord.Embed(title="❌ Database Error", description="ไม่สามารถดึงข้อมูลได้", color=discord.Color.red())
+            
+        shifts_ref = self.db.collection('shifts')
+        completed_shifts = shifts_ref.where('status', '==', 'completed').stream()
+        
+        doctor_stats = {}
+        for shift in completed_shifts:
+            data = shift.to_dict()
+            discord_name = data.get('discord_name', 'Unknown')
+            user_id = data.get('user_id', discord_name) 
+            char_name = data.get('character_name', 'ไม่ระบุ')
+            duration = data.get('duration_seconds', 0)
+            
+            if duration == 0:
+                check_in = data.get('check_in')
+                check_out = data.get('check_out')
+                if check_in and check_out:
+                    if hasattr(check_in, 'timestamp'):
+                        diff = check_out.timestamp() - check_in.timestamp()
+                        duration = diff
+                    else:
+                        try:
+                            diff = check_out - check_in
+                            duration = diff.total_seconds()
+                        except:
+                            pass
+            
+            if user_id not in doctor_stats:
+                doctor_stats[user_id] = {
+                    'discord_name': discord_name,
+                    'char_name': char_name,
+                    'total_seconds': 0,
+                    'shift_count': 0
+                }
+                
+            doctor_stats[user_id]['total_seconds'] += duration
+            doctor_stats[user_id]['shift_count'] += 1
+            
+        sorted_doctors = sorted(doctor_stats.values(), key=lambda x: x['total_seconds'], reverse=True)
+        
+        embed = discord.Embed(
+            title="🏆 ทำเนียบแพทย์ขยัน (Live Leaderboard)",
+            description="สรุปเวลาการเข้าเวรทั้งหมดของโรงพยาบาล อัปเดตแบบเรียลไทม์!",
+            color=discord.Color.gold()
+        )
+        
+        medals = ["🥇", "🥈", "🥉"]
+        
+        for i, doc in enumerate(sorted_doctors[:10]):
+            hours, remainder = divmod(doc['total_seconds'], 3600)
+            minutes, seconds = divmod(remainder, 60)
+            
+            time_str = f"{int(hours)} ชม. {int(minutes)} น. {int(seconds)} วิ."
+            rank_emoji = medals[i] if i < 3 else f"**#{i+1}**"
+            
+            embed.add_field(
+                name=f"{rank_emoji} {doc['char_name']}",
+                value=f"👤 Discord: {doc['discord_name']}\n⏱️ เวลารวม: **{time_str}**\n🏥 เข้าเวรไปแล้ว: {doc['shift_count']} ครั้ง",
+                inline=False
+            )
+            
+        embed.set_footer(text=f"อัปเดตล่าสุด • วันนี้ เวลา {datetime.now(self.tz).strftime('%H:%M')}")
+        return embed
+
+    @commands.Cog.listener('on_shift_update')
+    async def update_live_leaderboard(self):
+        if not self.db or not self.live_message:
+            return
+            
+        embed = self.calculate_leaderboard_embed()
+        try:
+            await self.live_message.edit(embed=embed)
+        except Exception as e:
+            print(f"Failed to update leaderboard: {e}")
+
+    @app_commands.command(name="setup_leaderboard", description="สร้างกระดาน Live Leaderboard (อัปเดตอัตโนมัติ)")
+    @app_commands.default_permissions(manage_roles=True)
+    async def setup_leaderboard(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        embed = self.calculate_leaderboard_embed()
+        message = await interaction.channel.send(embed=embed)
+        
+        self.live_message = message
+        self.leaderboard_channel_id = interaction.channel.id
+        
+        await interaction.followup.send("✅ สร้างกระดาน Live Leaderboard สำเร็จแล้วครับ!", ephemeral=True)
 
     @app_commands.command(name="setup_checkin", description="สร้างแผงปุ่มสำหรับกดเข้าเวร (ตั้งในห้อง ลงชื่อเข้าเวร)")
     @app_commands.default_permissions(manage_roles=True)
