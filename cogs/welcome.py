@@ -7,43 +7,62 @@ class Welcome(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
-        # Create a welcome embed
-        embed = discord.Embed(
-            title="👋 ยินดีต้อนรับสู่เซิร์ฟเวอร์!",
-            description=f"สวัสดีคุณ {member.mention} ยินดีต้อนรับเข้าสู่ระบบสื่อสารภายในองค์กรครับ",
-            color=discord.Color.teal()
-        )
+        guild = member.guild
         
-        embed.add_field(
-            name="📜 สิ่งที่ต้องทำเป็นอันดับแรก", 
-            value="กรุณาใช้คำสั่ง `/rules` ในช่องแชทเพื่ออ่านกฎระเบียบและข้อบังคับขององค์กร (โดยเฉพาะเรื่องนโยบายความลับของคนไข้)", 
-            inline=False
-        )
-        
-        embed.add_field(
-            name="🔐 การยืนยันตัวตน", 
-            value="หากคุณเป็นพนักงาน กรุณาใช้คำสั่ง `/verify` ตามด้วยรหัสพนักงานของคุณ เพื่อรับสิทธิ์การเข้าถึงห้องแชทต่างๆ", 
-            inline=False
-        )
-        
-        embed.set_thumbnail(url=member.display_avatar.url)
-        embed.set_footer(text="หากมีข้อสงสัย กรุณาติดต่อผู้ดูแลระบบ (Admin)")
+        # 1. ให้ยศ Unverified (ถ้ามี หรือจะสร้างใหม่ก็ได้)
+        role_name = "Unverified"
+        role = discord.utils.get(guild.roles, name=role_name)
+        if not role:
+            try:
+                role = await guild.create_role(name=role_name, color=discord.Color.light_grey())
+            except Exception:
+                pass
+                
+        if role:
+            try:
+                await member.add_roles(role)
+            except Exception:
+                pass
 
-        # Try to send to the server's system channel (if set)
-        if member.guild.system_channel:
-            await member.guild.system_channel.send(embed=embed)
+        # 2. ส่งข้อความต้อนรับ
+        # หาห้องที่ชื่อ "ต้อนรับ" หรือ "welcome"
+        welcome_channel = None
+        for channel in guild.text_channels:
+            if "ต้อนรับ" in channel.name or "welcome" in channel.name.lower():
+                welcome_channel = channel
+                break
+                
+        # ถ้าหาห้องต้อนรับไม่เจอ ให้ส่งข้อความไปหาแชทส่วนตัว (DM)
+        if welcome_channel:
+            embed = discord.Embed(
+                title="🏥 ยินดีต้อนรับบุคลากรใหม่!",
+                description=(
+                    f"สวัสดีครับคุณ {member.mention} ยินดีต้อนรับสู่โรงพยาบาลของเราครับ!\n\n"
+                    "👉 **เพื่อเริ่มต้นการทำงาน กรุณาไปที่ห้อง ยืนยันตัวตน เพื่อลงทะเบียนประวัติพนักงานครับ**\n"
+                    "เมื่อยืนยันตัวตนสำเร็จแล้ว ระบบจะมอบยศ `Gen.` ให้โดยอัตโนมัติครับ"
+                ),
+                color=discord.Color.green()
+            )
+            embed.set_thumbnail(url=member.display_avatar.url)
+            try:
+                await welcome_channel.send(content=member.mention, embed=embed)
+            except Exception:
+                pass
         else:
-            # If no system channel is set, try to find a general channel
-            channel = discord.utils.get(member.guild.text_channels, name='general') or \
-                      discord.utils.get(member.guild.text_channels, name='ทั่วไป')
-            if channel:
-                await channel.send(embed=embed)
-            else:
-                # Fallback: Send a Direct Message
-                try:
-                    await member.send(embed=embed)
-                except discord.Forbidden:
-                    pass
+            # Send DM if welcome channel doesn't exist
+            embed = discord.Embed(
+                title="🏥 ยินดีต้อนรับบุคลากรใหม่!",
+                description=(
+                    f"สวัสดีครับคุณ {member.name} ยินดีต้อนรับสู่โรงพยาบาลของเราครับ!\n\n"
+                    "👉 **กรุณาไปที่ห้อง ยืนยันตัวตน ในเซิร์ฟเวอร์เพื่อลงทะเบียนประวัติพนักงานครับ**\n"
+                    "เมื่อยืนยันตัวตนสำเร็จแล้ว ระบบจะมอบยศ `Gen.` ให้โดยอัตโนมัติครับ"
+                ),
+                color=discord.Color.green()
+            )
+            try:
+                await member.send(embed=embed)
+            except Exception:
+                pass
 
 async def setup(bot):
     await bot.add_cog(Welcome(bot))

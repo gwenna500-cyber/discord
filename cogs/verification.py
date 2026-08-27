@@ -51,10 +51,10 @@ class TicketUserView(discord.ui.View):
 
         guild = interaction.guild
         
-        role = discord.utils.get(guild.roles, name="Verified Staff")
+        role = discord.utils.get(guild.roles, name="Gen.")
         if not role:
             try:
-                role = await guild.create_role(name="Verified Staff", color=discord.Color.blue())
+                role = await guild.create_role(name="Gen.", color=discord.Color.blue())
             except Exception:
                 pass
 
@@ -113,10 +113,16 @@ class VerifyStartView(discord.ui.View):
         
         await interaction.response.defer(ephemeral=True)
         
-        role = discord.utils.get(guild.roles, name="Verified Staff")
+        role = discord.utils.get(guild.roles, name="Gen.")
         if role and role in user.roles:
-            await interaction.followup.send("✅ คุณยืนยันตัวตนเรียบร้อยแล้วครับ ไม่ต้องทำซ้ำ", ephemeral=True)
+            await interaction.followup.send("✅ คุณมียศ Gen. และยืนยันตัวตนเรียบร้อยแล้วครับ ไม่ต้องทำซ้ำ", ephemeral=True)
             return
+            
+        if self.db:
+            doc = self.db.collection('verified_staff').document(str(user.id)).get()
+            if doc.exists:
+                await interaction.followup.send("✅ ข้อมูลของคุณถูกบันทึกในระบบว่ายืนยันตัวตนไปแล้วครับ ไม่สามารถทำซ้ำได้", ephemeral=True)
+                return
 
         category = discord.utils.get(guild.categories, name="Verification Tickets")
         if not category:

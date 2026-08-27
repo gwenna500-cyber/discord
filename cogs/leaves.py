@@ -25,6 +25,11 @@ class Leaves(commands.Cog):
         duration="จำนวนวันที่ต้องการลา",
         reason="เหตุผลการลา"
     )
+    @app_commands.rename(
+        character_name="ชื่อตัวละคร",
+        duration="จำนวนวัน",
+        reason="เหตุผล"
+    )
     @app_commands.choices(duration=[
         app_commands.Choice(name="1 วัน", value=1),
         app_commands.Choice(name="3 วัน", value=3),
